@@ -19,6 +19,12 @@ public:
     virtual Image* apply(const Image* src) const = 0;
 
     /**
+     * @brief Aplica el filtro sobre una region rectangular [start_x, end_x) x [start_y, end_y).
+     * Esencial para la paralelización por cuadrantes en memoria compartida (Pthreads y OpenMP).
+     */
+    virtual void apply_region(const Image* src, Image* dst, int start_x, int end_x, int start_y, int end_y) const = 0;
+
+    /**
      * @brief Retorna el nombre del filtro.
      */
     virtual const char* get_name() const = 0;

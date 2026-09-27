@@ -4,58 +4,75 @@ Este repositorio contiene la solución modular para el procesamiento secuencial 
 
 ---
 
-## 1. Diseño 1: Aplicación Base (`processor`)
+## 1. Módulos y Diseños Implementados
 
+### Diseño 1: Aplicación Base (`processor`)
 - **Objetivo:** Carga, clonación, serialización y validación de imágenes PGM (P2) y PPM (P3) sin alteración de datos.
 - **E/S:** Admite argumentos de línea de comandos, redirección estándar (`stdin`) y tuberías (`pipes`).
 
----
+### Diseño 2: Versión Secuencial con Filtros (`filterer`)
+- **Objetivo:** Convolución 2D secuencial de filtros visuales: `blur`, `gaussian`, `laplace`, `sharpen`, `sobel`.
+- **Características:** Soporte para encadenar múltiples filtros (`--f blur --f sharpen`). Medición aislada de tiempos de convolución.
 
-## 2. Diseño 2: Versión Secuencial de Filtros (`filterer`)
-
-- **Objetivo:** Procesamiento visual de imágenes mediante filtros de convolución 2D aplicados de forma secuencial.
-- **Filtros Implementados:**
-  - `blur` (Suavizado / Promedio 3x3)
-  - `gaussian` (Desenfoque Gaussiano 3x3 normalizado sobre 16)
-  - `laplace` (Detección de bordes Laplaciano 3x3)
-  - `sharpen` (Realce / Sharpening 3x3)
-  - `sobel` (Magnitud de gradiente Sobel $G = \sqrt{G_x^2 + G_y^2}$)
-- **Encadenamiento:** Permite aplicar una secuencia de uno o varios filtros consecutivamente:
-  ```bash
-  ./filterer fruit.ppm fruit_out.ppm --f blur --f sharpen
-  ```
-- **Medición de Rendimiento:**
-  - Registra el **Tiempo de CPU** (`std::clock`) y el **Tiempo Total / Wall-clock** (`std::chrono::high_resolution_clock`) exclusivamente durante la fase de convolución numérica (aislando los tiempos de lectura/escritura de disco).
-
----
-
-## 3. Justificación Técnica y Estructuras de Datos
-
-1. **Reemplazo de `std::vector`:**
-   - La prueba de concepto de clase (`ejemplo clase/codigo_filtro.cpp`) usaba `vector<vector<double>>` para kernels y `vector<vector<Pixel>>` para la imagen.
-   - En esta implementación, se transformaron a matrices numéricas estáticas continuas `double kernel[3][3]` y un buffer unidimensional dinámico contiguo (`unsigned char* data`).
-   - **Beneficios:** Máxima localidad espacial de caché, cero sobrecosto por indirección de punteros, y total compatibilidad con las directivas de paralelismo de **OpenMP**, cuadrantes en **Pthreads** y envío de buffers contiguos con **MPI**.
-2. **Reemplazo de `std::string`:**
-   - Se utiliza el módulo `CharUtils` con punteros `const char*` y funciones estándar de `<cstring>`, cumpliendo la recomendación académica.
-3. **Manejo de Bordes:**
-   - Se implementa sujeción de bordes (*clamping*) para asegurar que ningún píxel periférico produzca accesos fuera de rango o artefactos oscuros artificiales.
+### Diseño 3: Memoria Compartida (`th_filterer` y `omp_filterer`)
+- **Parte A (`th_filterer`):**
+  - Divide la imagen en **4 cuadrantes geográficos independientes**:
+    - Arriba-Izquierda: $[0, mid_X) \times [0, mid_Y)$
+    - Arriba-Derecha:   $[mid_X, W) \times [0, mid_Y)$
+    - Abajo-Izquierda:  $[0, mid_X) \times [mid_Y, H)$
+    - Abajo-Derecha:    $[mid_X, W) \times [mid_Y, H)$
+  - Asigna 4 hilos POSIX (`pthread_t`) a cada región.
+  - **Sin condiciones de carrera (Race-Free):** La imagen fuente `src` es de solo lectura y las regiones de escritura en `dst` son mutuamente disyuntas.
+- **Parte B (`omp_filterer`):**
+  - Paralelización a nivel de bucles de filas mediante directivas `#pragma omp parallel for schedule(dynamic)`.
+  - Soporta parametrizar número de hilos con `--t <num_hilos>`.
 
 ---
 
-## 4. Compilación y Pruebas en Docker / Linux
+## 2. Justificación Técnica y Respuestas para el Informe
 
-### Compilación completa con `make`:
+1. **¿Por qué los diseños pueden o no aprovechar múltiples núcleos del procesador?**
+   - **Pthreads:** Al particionar la matriz de la imagen en 4 cuadrantes, el sistema operativo distribuye los 4 hilos en hasta 4 núcleos lógicos o físicos simultáneamente, reduciendo el tiempo de cálculo.
+   - **OpenMP:** Descompone las $H$ filas de la imagen dinámicamente entre todos los núcleos disponibles, ofreciendo un balanceo de carga adaptativo.
+2. **¿Qué estructuras de datos se utilizaron?**
+   - Buffers continuos 1D `unsigned char* data`, estructuras de región `ThreadRegionData` y matrices estáticas `double[3][3]`, eliminando por completo `std::vector` y `std::string` para maximizar la localidad espacial en la caché de CPU.
+3. **Cálculo de Aceleración y Eficiencia:**
+   - **Speedup:** $S_p = \frac{T_{\text{secuencial}}}{T_{\text{paralelo}}}$
+   - **Eficiencia:** $E_p = \frac{S_p}{P}$
+
+---
+
+## 3. Compilación
+
+Para compilar todos los ejecutables (`processor`, `filterer`, `th_filterer`, `omp_filterer`):
+
 ```bash
 make
 ```
 
-### Compilación manual con `g++` (sin herramientas adicionales):
-```bash
-# Compilar 'filterer'
-g++ -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/filter_main.cpp -o filterer
+O compilación manual con `g++`:
 
-# Compilar 'processor'
-g++ -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/main.cpp -o processor
+```bash
+# Compilar th_filterer (Pthreads)
+g++ -std=c++17 -O2 -Iinclude -pthread src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/PthreadProcessor.cpp src/OpenMPProcessor.cpp src/th_main.cpp -o th_filterer
+
+# Compilar omp_filterer (OpenMP)
+g++ -std=c++17 -O2 -Iinclude -fopenmp src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/PthreadProcessor.cpp src/OpenMPProcessor.cpp src/omp_main.cpp -o omp_filterer
+```
+
+---
+
+## 4. Ejecución de Pruebas
+
+```bash
+# Probar versión Pthreads (4 cuadrantes en damma y sulfur)
+make test-threads
+
+# Probar versión OpenMP
+make test-omp
+
+# Comparativa directa de rendimiento (Secuencial vs Pthreads vs OpenMP)
+make test-compare
 ```
 
 ---
@@ -63,20 +80,15 @@ g++ -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src
 ## 5. Ejemplos de Uso
 
 ```bash
-# Filtro Blur a imagen a color
-./filterer samples/sample.ppm samples/output_blur.ppm --f blur
+# Pthreads: Filtro blur en damma.ppm
+./th_filterer samples/damma.ppm samples/output_blur_th.ppm --f blur
 
-# Filtro Laplace a imagen a color
-./filterer samples/sample.ppm samples/output_laplace.ppm --f laplace
+# Pthreads: Filtro laplace en sulfur.pgm
+./th_filterer samples/sulfur.pgm samples/output_laplace_th.pgm --f laplace
 
-# Filtro Realce a imagen en escala de grises
-./filterer samples/sample.pgm samples/output_sharpen.pgm --f sharpen
+# OpenMP: Aplicar los 3 filtros a sulfur.pgm
+./omp_filterer samples/sulfur.pgm samples/output_omp.pgm
 
-# Aplicar múltiples filtros encadenados
-./filterer samples/sample.ppm samples/output_multi.ppm --f blur --f sharpen
-```
-
-### Ejecución de pruebas automáticas:
-```bash
-make test-filterer
+# OpenMP: Filtro sharpen con 4 hilos
+./omp_filterer samples/damma.ppm samples/output_sharpen_omp.ppm --f sharpen --t 4
 ```

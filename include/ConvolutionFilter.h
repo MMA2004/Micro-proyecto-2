@@ -26,6 +26,11 @@ public:
      */
     Image* apply(const Image* src) const override;
 
+    /**
+     * @brief Aplica la convolución 3x3 sobre una región rectangular específica.
+     */
+    void apply_region(const Image* src, Image* dst, int start_x, int end_x, int start_y, int end_y) const override;
+
     const char* get_name() const override { return "Convolucion 3x3"; }
 };
 

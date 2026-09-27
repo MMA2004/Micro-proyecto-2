@@ -13,15 +13,26 @@ ConvolutionFilter::ConvolutionFilter(const double k[3][3], double f, double b)
 
 Image* ConvolutionFilter::apply(const Image* src) const {
     if (!src) return nullptr;
-
     Image* dst = src->clone();
+    apply_region(src, dst, 0, src->get_width(), 0, src->get_height());
+    return dst;
+}
+
+void ConvolutionFilter::apply_region(const Image* src, Image* dst,
+                                     int start_x, int end_x,
+                                     int start_y, int end_y) const {
+    if (!src || !dst) return;
+
     int width = src->get_width();
     int height = src->get_height();
     int channels = src->get_channels();
     int max_val = src->get_max_val();
 
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
+    for (int y = start_y; y < end_y; ++y) {
+        if (y < 0 || y >= height) continue;
+        for (int x = start_x; x < end_x; ++x) {
+            if (x < 0 || x >= width) continue;
+
             for (int c = 0; c < channels; ++c) {
                 double sum = 0.0;
 
@@ -46,6 +57,4 @@ Image* ConvolutionFilter::apply(const Image* src) const {
             }
         }
     }
-
-    return dst;
 }

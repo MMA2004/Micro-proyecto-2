@@ -14,6 +14,7 @@ public:
     ~SobelFilter() override = default;
 
     Image* apply(const Image* src) const override;
+    void apply_region(const Image* src, Image* dst, int start_x, int end_x, int start_y, int end_y) const override;
 
     const char* get_name() const override {
         return "Sobel (Magnitud de Gradiente)";
