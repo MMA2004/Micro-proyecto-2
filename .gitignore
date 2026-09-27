@@ -1,0 +1,14 @@
+# Build and executables
+build/
+bin/
+processor
+processor.exe
+*.o
+
+# Outputs de prueba
+samples/output_*
+samples/pipe_*
+
+# IDEs
+.vscode/
+.idea/
