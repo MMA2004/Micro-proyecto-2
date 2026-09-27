@@ -1,0 +1,187 @@
+#include "ImageIO.h"
+#include "CharUtils.h"
+#include "Timer.h"
+#include "MPIProcessor.h"
+#include "BlurFilter.h"
+#include "LaplaceFilter.h"
+#include "SharpenFilter.h"
+#include "SobelFilter.h"
+#include <iostream>
+#include <mpi.h>
+
+namespace {
+    const int MAX_FILTERS = 32;
+
+    void print_usage(const char* prog_name) {
+        std::cerr << "Uso de " << (prog_name ? prog_name : "mpi_filterer") << ":\n"
+                  << "  mpirun -np <num_procesos> " << (prog_name ? prog_name : "mpi_filterer") 
+                  << " <input.ppm/pgm> <output.ppm/pgm> [--f <filtro1> ...]\n\n"
+                  << "Filtros disponibles:\n"
+                  << "  blur       : Suavizado promedio 3x3\n"
+                  << "  gaussian   : Desenfoque gaussiano 3x3\n"
+                  << "  laplace    : Deteccion de bordes laplaciano 3x3\n"
+                  << "  sharpen    : Realce (sharpening) 3x3\n"
+                  << "  sobel      : Magnitud de gradiente Sobel 3x3\n\n"
+                  << "Nota: Si no se especifica '--f', se aplican los 3 filtros principales (blur, laplace, sharpen).\n"
+                  << "Ejemplo:\n"
+                  << "  mpirun -np 4 ./mpi_filterer samples/damma.ppm samples/output_mpi.ppm --f blur\n";
+    }
+
+    Filter* create_filter_by_name(const char* name) {
+        if (!name) return nullptr;
+        if (CharUtils::equals(name, "blur") || CharUtils::equals(name, "suavizado")) {
+            return new BlurFilter(false);
+        }
+        if (CharUtils::equals(name, "gaussian") || CharUtils::equals(name, "desenfoque")) {
+            return new BlurFilter(true);
+        }
+        if (CharUtils::equals(name, "laplace") || CharUtils::equals(name, "bordes")) {
+            return new LaplaceFilter();
+        }
+        if (CharUtils::equals(name, "sharpen") || CharUtils::equals(name, "realce")) {
+            return new SharpenFilter();
+        }
+        if (CharUtils::equals(name, "sobel")) {
+            return new SobelFilter();
+        }
+        return nullptr;
+    }
+}
+
+int main(int argc, char* argv[]) {
+    MPI_Init(&argc, &argv);
+
+    int rank = 0;
+    int num_procs = 1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+
+    if (argc < 3) {
+        if (rank == 0) print_usage(argv[0]);
+        MPI_Finalize();
+        return 1;
+    }
+
+    if (CharUtils::equals(argv[1], "--help") || CharUtils::equals(argv[1], "-h")) {
+        if (rank == 0) print_usage(argv[0]);
+        MPI_Finalize();
+        return 0;
+    }
+
+    const char* input_filepath = argv[1];
+    const char* output_filepath = argv[2];
+
+    Filter* filters[MAX_FILTERS];
+    int filter_count = 0;
+
+    for (int i = 3; i < argc; ++i) {
+        if (CharUtils::equals(argv[i], "--f") || CharUtils::equals(argv[i], "-f")) {
+            if (i + 1 < argc) {
+                const char* filter_name = argv[i + 1];
+                Filter* f = create_filter_by_name(filter_name);
+                if (f) {
+                    if (filter_count < MAX_FILTERS) {
+                        filters[filter_count++] = f;
+                    }
+                } else {
+                    if (rank == 0) {
+                        std::cerr << "[Error] Filtro desconocido: '" << filter_name << "'.\n";
+                    }
+                    for (int k = 0; k < filter_count; ++k) delete filters[k];
+                    MPI_Finalize();
+                    return 1;
+                }
+                ++i;
+            }
+        }
+    }
+
+    // Si no se especificó filtro, aplicar los 3 principales
+    if (filter_count == 0) {
+        if (rank == 0) {
+            std::cerr << "[mpi_filterer] Sin filtro especificado. Aplicando filtros estándar (blur, laplace, sharpen)...\n";
+        }
+        filters[filter_count++] = new BlurFilter();
+        filters[filter_count++] = new LaplaceFilter();
+        filters[filter_count++] = new SharpenFilter();
+    }
+
+    Image* original_img = nullptr;
+    if (rank == 0) {
+        std::cerr << "[mpi_filterer] Iniciando clúster MPI con " << num_procs << " procesos/nodos.\n";
+        std::cerr << "[mpi_filterer] Leyendo archivo de entrada: " << input_filepath << "...\n";
+        original_img = ImageIO::read_from_file(input_filepath);
+
+        if (!original_img) {
+            std::cerr << "[Error] No se pudo cargar la imagen desde: " << input_filepath << "\n";
+            // Notificar a workers para abortar
+            int abort_flag = -1;
+            MPI_Bcast(&abort_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
+            for (int k = 0; k < filter_count; ++k) delete filters[k];
+            MPI_Finalize();
+            return 1;
+        }
+
+        std::cerr << "[mpi_filterer] Imagen cargada:\n"
+                  << "  - Tipo:        " << original_img->get_magic_number() << "\n"
+                  << "  - Resolucion:  " << original_img->get_width() << " x " << original_img->get_height() << "\n"
+                  << "  - Canales:     " << original_img->get_channels() << "\n";
+    }
+
+    // Difundir cantidad de filtros a aplicar
+    MPI_Bcast(&filter_count, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (filter_count < 0) {
+        // Señal de aborto
+        for (int k = 0; k < filter_count; ++k) delete filters[k];
+        MPI_Finalize();
+        return 1;
+    }
+
+    Image* current_img = original_img;
+    Timer total_timer;
+    if (rank == 0) total_timer.start();
+
+    // Aplicar cada filtro distribuido
+    for (int k = 0; k < filter_count; ++k) {
+        if (rank == 0) {
+            std::cerr << "\n>>> Aplicando filtro " << (k + 1) << "/" << filter_count << ": " << filters[k]->get_name() << "\n";
+        }
+
+        Image* filtered_img = MPIProcessor::process_filter(current_img, filters[k], rank, num_procs);
+
+        if (rank == 0) {
+            if (current_img != original_img) {
+                delete current_img;
+            }
+            current_img = filtered_img;
+        }
+    }
+
+    if (rank == 0) {
+        total_timer.stop();
+        std::cerr << "\n============================================================\n";
+        total_timer.print_report("Filtrado Total MPI (Memoria Distribuida)");
+        std::cerr << "============================================================\n";
+
+        std::cerr << "[mpi_filterer] Guardando imagen resultante en: " << output_filepath << "...\n";
+        bool success = ImageIO::write_to_file(current_img, output_filepath);
+
+        if (success) {
+            std::cerr << "[mpi_filterer] Procesamiento distribuido completado exitosamente.\n";
+        } else {
+            std::cerr << "[Error] No se pudo guardar la imagen en: " << output_filepath << "\n";
+        }
+
+        if (current_img != original_img) {
+            delete current_img;
+        }
+        delete original_img;
+    }
+
+    for (int k = 0; k < filter_count; ++k) {
+        delete filters[k];
+    }
+
+    MPI_Finalize();
+    return 0;
+}

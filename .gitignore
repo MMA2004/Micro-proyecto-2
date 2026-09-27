@@ -1,14 +1,52 @@
-# Build and executables
+# ==========================================
+# Compilacion y ejecutables
+# ==========================================
 build/
 bin/
+*.o
+*.obj
+*.exe
+*.out
+
+# Ejecutables del proyecto
 processor
 processor.exe
-*.o
+filterer
+filterer.exe
+th_filterer
+th_filterer.exe
+omp_filterer
+omp_filterer.exe
+mpi_filterer
+mpi_filterer.exe
 
-# Outputs de prueba
+# ==========================================
+# Imagenes generadas en pruebas (outputs)
+# ==========================================
 samples/output_*
 samples/pipe_*
+samples/*_blur*
+samples/*_laplace*
+samples/*_sharpen*
+samples/*_sobel*
+samples/*_gaussian*
+samples/*_mpi*
+samples/*_th*
+samples/*_omp*
+samples/*_seq*
+samples/*_chained*
+samples/*_N.*
+samples/*_filtered*
 
-# IDEs
+# ==========================================
+# Archivos temporales y de entorno
+# ==========================================
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Configuracion de IDEs
 .vscode/
 .idea/

@@ -1,10 +1,13 @@
-CXX := g++
+CXX := mpicxx
+MPICXX := mpicxx
 CXXFLAGS := -Wall -Wextra -std=c++17 -O2 -Iinclude -pthread -fopenmp
 
 SRC_DIR := src
 INC_DIR := include
 OBJ_DIR := build
 BIN_DIR := bin
+
+INCS := $(wildcard $(INC_DIR)/*.h)
 
 # Modulos compartidos
 COMMON_SRCS := $(SRC_DIR)/Image.cpp \
@@ -27,10 +30,11 @@ TARGET_PROCESSOR := processor
 TARGET_FILTERER  := filterer
 TARGET_THREADS   := th_filterer
 TARGET_OMP       := omp_filterer
+TARGET_MPI       := mpi_filterer
 
-.PHONY: all clean test test-filterer test-threads test-omp test-compare dirs
+.PHONY: all clean test test-filterer test-threads test-omp test-mpi test-all-designs dirs
 
-all: dirs $(TARGET_PROCESSOR) $(TARGET_FILTERER) $(TARGET_THREADS) $(TARGET_OMP)
+all: dirs $(TARGET_PROCESSOR) $(TARGET_FILTERER) $(TARGET_THREADS) $(TARGET_OMP) $(TARGET_MPI)
 
 dirs:
 	@mkdir -p $(OBJ_DIR) $(BIN_DIR)
@@ -51,12 +55,24 @@ $(TARGET_THREADS): $(OBJ_DIR)/th_main.o $(COMMON_OBJS)
 $(TARGET_OMP): $(OBJ_DIR)/omp_main.o $(COMMON_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Regla de compilación de objetos con creación automática de carpeta build
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# Ejecutable Diseño 4: Memoria distribuida con MPI
+$(TARGET_MPI): $(OBJ_DIR)/mpi_main.o $(OBJ_DIR)/MPIProcessor.o $(COMMON_OBJS)
+	$(MPICXX) $(CXXFLAGS) -o $@ $^
 
-# Pruebas Diseño 1
+# Reglas de compilación de objetos
+$(OBJ_DIR)/mpi_main.o: $(SRC_DIR)/mpi_main.cpp
+	@mkdir -p $(OBJ_DIR)
+	$(MPICXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/MPIProcessor.o: $(SRC_DIR)/MPIProcessor.cpp
+	@mkdir -p $(OBJ_DIR)
+	$(MPICXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp $(INCS)
+	@mkdir -p $(OBJ_DIR)
+	$(MPICXX) $(CXXFLAGS) -c $< -o $@
+
+# Pruebas Diseño 1: Base
 test: $(TARGET_PROCESSOR)
 	@echo "=== [Diseno 1] Probando processor con PGM (P2) ==="
 	./$(TARGET_PROCESSOR) samples/sample.pgm samples/output_sample.pgm
@@ -101,17 +117,27 @@ test-omp: $(TARGET_OMP)
 	./$(TARGET_OMP) samples/damma.ppm samples/output_omp_damma.ppm --f blur
 	@echo "\nPruebas de OpenMP finalizadas con exito."
 
-# Comparativa de rendimiento: Secuencial vs Pthreads vs OpenMP
-test-compare: $(TARGET_FILTERER) $(TARGET_THREADS) $(TARGET_OMP)
-	@echo "=========================================================="
-	@echo " COMPARATIVA DE RENDIMIENTO: Secuencial vs Pthreads vs OMP"
-	@echo "=========================================================="
-	@echo "\n1. Ejecucion Secuencial (Diseno 2):"
+# Pruebas Diseño 4: Memoria distribuida con MPI
+test-mpi: $(TARGET_MPI)
+	@echo "=== [Diseno 4 - MPI] Filtro Blur en damma.ppm con 4 procesos ==="
+	mpirun --allow-run-as-root -np 4 ./$(TARGET_MPI) samples/damma.ppm samples/output_mpi_damma.ppm --f blur
+	@echo "\n=== [Diseno 4 - MPI] Aplicando filtros a sulfur.pgm con 4 procesos ==="
+	mpirun --allow-run-as-root -np 4 ./$(TARGET_MPI) samples/sulfur.pgm samples/output_mpi_sulfur.pgm
+	@echo "\nPruebas de MPI finalizadas con exito."
+
+# Comparativa de los 4 diseños
+test-all-designs: $(TARGET_FILTERER) $(TARGET_THREADS) $(TARGET_OMP) $(TARGET_MPI)
+	@echo "=========================================================================="
+	@echo " COMPARATIVA GENERAL: Secuencial vs Pthreads vs OpenMP vs MPI (Distribuido)"
+	@echo "=========================================================================="
+	@echo "\n1. Secuencial (Diseno 2):"
 	./$(TARGET_FILTERER) samples/damma.ppm samples/output_seq.ppm --f blur
-	@echo "\n2. Ejecucion Paralela con Pthreads (4 cuadrantes, Diseno 3):"
+	@echo "\n2. Pthreads 4 cuadrantes (Diseno 3 - Memoria Compartida):"
 	./$(TARGET_THREADS) samples/damma.ppm samples/output_th.ppm --f blur
-	@echo "\n3. Ejecucion Paralela con OpenMP (Diseno 3):"
+	@echo "\n3. OpenMP (Diseno 3 - Memoria Compartida):"
 	./$(TARGET_OMP) samples/damma.ppm samples/output_omp.ppm --f blur
+	@echo "\n4. MPI con 4 nodos (Diseno 4 - Memoria Distribuida):"
+	mpirun --allow-run-as-root -np 4 ./$(TARGET_MPI) samples/damma.ppm samples/output_mpi.ppm --f blur
 	@echo "\nComparativa completada."
 
 clean:
@@ -119,4 +145,5 @@ clean:
 	       $(TARGET_FILTERER) $(TARGET_FILTERER).exe \
 	       $(TARGET_THREADS) $(TARGET_THREADS).exe \
 	       $(TARGET_OMP) $(TARGET_OMP).exe \
+	       $(TARGET_MPI) $(TARGET_MPI).exe \
 	       samples/output_* samples/pipe_*

@@ -1,0 +1,37 @@
+services:
+  master:
+    image: japeto/parallel-tools:v64
+    container_name: mpi_master
+    hostname: master
+    volumes:
+      - ..:/app
+    working_dir: /app/Micro-proyecto-2
+    command: sleep infinity
+    networks:
+      - mpi_net
+
+  worker1:
+    image: japeto/parallel-tools:v64
+    container_name: mpi_worker1
+    hostname: worker1
+    volumes:
+      - ..:/app
+    working_dir: /app/Micro-proyecto-2
+    command: sleep infinity
+    networks:
+      - mpi_net
+
+  worker2:
+    image: japeto/parallel-tools:v64
+    container_name: mpi_worker2
+    hostname: worker2
+    volumes:
+      - ..:/app
+    working_dir: /app/Micro-proyecto-2
+    command: sleep infinity
+    networks:
+      - mpi_net
+
+networks:
+  mpi_net:
+    driver: bridge
