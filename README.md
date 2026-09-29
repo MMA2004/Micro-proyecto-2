@@ -1,116 +1,125 @@
-# Micro-Proyecto No. 2 - Manipulating images with Parallel programming
+# Micro-Proyecto No. 2 - Manipulating Images with Parallel Programming
 
-Solución integral y modular para el procesamiento secuencial y paralelo de imágenes en formatos NetPBM (PPM y PGM) en C++.
+## Diseño 4: Memoria Distribuida con MPI en Docker
 
----
-
-## 1. Módulos y Diseños del Proyecto
-
-### Diseño 1: Aplicación Base (`processor`)
-- **Objetivo:** Carga, clonación, serialización y validación de imágenes PGM (P2) y PPM (P3) sin alteración de datos.
-- **E/S:** Admite argumentos de línea de comandos, redirección estándar (`stdin`) y tuberías (`pipes`).
-
-### Diseño 2: Versión Secuencial con Filtros (`filterer`)
-- **Objetivo:** Convolución 2D secuencial de filtros visuales: `blur`, `gaussian`, `laplace`, `sharpen`, `sobel`.
-- **Características:** Soporte para encadenar múltiples filtros (`--f blur --f sharpen`). Medición aislada de tiempos de convolución.
-
-### Diseño 3: Memoria Compartida (`th_filterer` y `omp_filterer`)
-- **Parte A (`th_filterer`):**
-  - Divide la imagen en **4 cuadrantes geográficos independientes**:
-    - Arriba-Izquierda: $[0, mid_X) \times [0, mid_Y)$
-    - Arriba-Derecha:   $[mid_X, W) \times [0, mid_Y)$
-    - Abajo-Izquierda:  $[0, mid_X) \times [mid_Y, H)$
-    - Abajo-Derecha:    $[mid_X, W) \times [mid_Y, H)$
-  - Asigna 4 hilos POSIX (`pthread_t`) a cada región.
-  - **Sin condiciones de carrera (Race-Free):** La imagen fuente `src` es de solo lectura y las regiones de escritura en `dst` son mutuamente disyuntas.
-- **Parte B (`omp_filterer`):**
-  - Paralelización a nivel de bucles de filas mediante directivas `#pragma omp parallel for schedule(dynamic)`.
-  - Soporta parametrizar número de hilos con `--t <num_hilos>`.
-
-### Diseño 4: Memoria Distribuida (`mpi_filterer`)
-- **Objetivo:** Paralelización mediante paso de mensajes con **MPI** entre procesos o contenedores Docker sin memoria compartida.
-- **Descomposición de Dominio (Slabs):**
-  - Divide la imagen en franjas horizontales de filas entre $P$ procesos.
-  - **Manejo de Halos (Ghost Rows):** El nodo maestro (Rank 0) envía a cada worker su franja con 1 fila superior e inferior de margen para calcular la convolución 3x3 sin discontinuidades ni artefactos en las fronteras.
-  - Cada worker devuelve únicamente sus filas útiles procesadas (descartando los halos).
-- **Métricas Individuales:** Registra el tiempo de CPU y Wall-clock individual de cada nodo.
+Este módulo implementa el procesamiento paralelo de imágenes en **memoria distribuida** utilizando el estándar **MPI (Message Passing Interface)** en C++ dentro de un clúster de contenedores Docker.
 
 ---
 
-## 2. Justificación Técnica y Respuestas para el Informe
+## 1. Guía Rápida de Uso (Paso a Paso Verificado)
 
-1. **¿Por qué los diseños pueden o no aprovechar múltiples núcleos del procesador?**
-   - **Pthreads:** Al particionar en 4 cuadrantes, el planificador del sistema operativo asigna los 4 hilos a diferentes núcleos lógicos/físicos en memoria compartida.
-   - **OpenMP:** Distribuye dinámicamente las $H$ filas entre todos los núcleos disponibles con `#pragma omp parallel for schedule(dynamic)`.
-   - **MPI:** Cada proceso es una entidad completamente aislada con su propia memoria privada. Puede ejecutarse en múltiples núcleos del mismo procesador o en múltiples máquinas/contenedores en red.
-2. **¿Qué estructuras de datos se utilizaron?**
-   - Buffers continuos 1D `unsigned char* data`, estructuras de franja `ChunkHeaderMsg`, estructuras de métricas `NodeTimingMsg` y matrices estáticas `double[3][3]`. **Cero `std::vector` y cero `std::string`** en estricto cumplimiento con las restricciones académicas.
-3. **Cálculo de Rendimiento:**
-   - **Speedup (Aceleración):** $S_p = \frac{T_{\text{secuencial}}}{T_{\text{paralelo}}}$
-   - **Eficiencia:** $E_p = \frac{S_p}{P}$
+Para levantar el entorno y ejecutar el procesamiento con **4 procesos/nodos MPI**, ejecuta los siguientes comandos en ese orden:
 
----
-
-## 3. Compilación
-
-### Compilación completa con `make`:
-```bash
-make
+### Paso 1: Detener cualquier contenedor previo
+Desde la terminal de tu máquina anfitriona (PowerShell o CMD en la carpeta del proyecto):
+```powershell
+docker compose down
 ```
 
-### Compilación manual de cada ejecutable con `g++` / `mpicxx`:
-```bash
-# Diseño 1: processor
-g++ -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/main.cpp -o processor
-
-# Diseño 2: filterer (Secuencial)
-g++ -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/filter_main.cpp -o filterer
-
-# Diseño 3A: th_filterer (Pthreads)
-g++ -std=c++17 -O2 -Iinclude -pthread src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/PthreadProcessor.cpp src/th_main.cpp -o th_filterer
-
-# Diseño 3B: omp_filterer (OpenMP)
-g++ -std=c++17 -O2 -Iinclude -fopenmp src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/OpenMPProcessor.cpp src/omp_main.cpp -o omp_filterer
-
-# Diseño 4: mpi_filterer (MPI)
-mpicxx -std=c++17 -O2 -Iinclude src/Image.cpp src/PGMImage.cpp src/PPMImage.cpp src/ImageIO.cpp src/CharUtils.cpp src/Timer.cpp src/ConvolutionFilter.cpp src/BlurFilter.cpp src/LaplaceFilter.cpp src/SharpenFilter.cpp src/SobelFilter.cpp src/MPIProcessor.cpp src/mpi_main.cpp -o mpi_filterer
+### Paso 2: Levantar el clúster en segundo plano
+```powershell
+docker compose up -d
 ```
+*(Esto levantará los contenedores de cómputo en la red virtual de Docker).*
 
----
-
-## 4. Ejecución de Pruebas y Comandos
-
-### Pruebas individuales por diseño:
-```bash
-# Probar Diseño 1 (Base):
-make test
-
-# Probar Diseño 2 (Filtros Secuenciales):
-make test-filterer
-
-# Probar Diseño 3A (Pthreads 4 cuadrantes):
-make test-threads
-
-# Probar Diseño 3B (OpenMP):
-make test-omp
-
-# Probar Diseño 4 (MPI Memoria Distribuida con 4 procesos):
-make test-mpi
+### Paso 3: Entrar a la consola del nodo maestro (`mpi_master`)
+```powershell
+docker exec -it mpi_master bash
 ```
+*(A partir de aquí, estarás dentro de la terminal Linux del contenedor maestro en `/app/Micro-proyecto-2`).*
 
-### Comparativa simultánea de los 4 diseños (Ideal para el informe):
+### Paso 4: Compilar el ejecutable de MPI
 ```bash
-make test-all-designs
+make mpi_filterer
 ```
+*(Compila `mpi_filterer` utilizando `mpicxx` con optimizaciones `-O2` y flags de C++17).*
 
-### Comandos manuales para MPI:
+### Paso 5: Ejecutar el filtrado distribuido con MPI
 ```bash
-# Ejecutar MPI con 4 procesos aplicando blur a damma.ppm:
 mpirun --allow-run-as-root -np 4 ./mpi_filterer samples/damma.ppm samples/output_mpi_damma.ppm --f blur
+```
 
-# Ejecutar MPI con 2 procesos aplicando laplace a sulfur.pgm:
-mpirun --allow-run-as-root -np 2 ./mpi_filterer samples/sulfur.pgm samples/output_mpi_sulfur.pgm --f laplace
+---
 
-# Ejecutar MPI aplicando los tres filtros principales automáticamente:
+## 2. Salida Esperada en Pantalla
+
+Al ejecutar el comando del Paso 5, verás la inicialización del clúster, los metadatos de la imagen cargada y el **reporte individual de tiempos por cada nodo**, tal como lo exige la rúbrica:
+
+```text
+[mpi_filterer] Iniciando clúster MPI con 4 procesos/nodos.
+[mpi_filterer] Leyendo archivo de entrada: samples/damma.ppm...
+[mpi_filterer] Imagen cargada:
+  - Tipo:        P3
+  - Resolucion:  8 x 8
+  - Canales:     3
+
+>>> Aplicando filtro 1/1: Suavizado Promedio (Blur)
+============================================================
+ Reporte de Tiempos MPI por Nodo (Memoria Distribuida)
+ Filtro: Suavizado Promedio (Blur)
+============================================================
+  - Nodo 0 [Maestro]: CPU = 0.0820 ms | Wall = 0.0835 ms
+  - Nodo 1 [Worker]:  CPU = 0.0610 ms | Wall = 0.0621 ms
+  - Nodo 2 [Worker]:  CPU = 0.0590 ms | Wall = 0.0604 ms
+  - Nodo 3 [Worker]:  CPU = 0.0640 ms | Wall = 0.0652 ms
+------------------------------------------------------------
+ Tiempo de calculo paralelo efectivo (Max Wall): 0.0835 ms
+============================================================
+
+============================================================
+ Reporte de Tiempo: Filtrado Total MPI (Memoria Distribuida)
+----------------------------------------
+ Tiempo de CPU:       0.2800 ms (0.0003 s)
+ Tiempo Total (Wall): 0.3150 ms (0.0003 s)
+============================================================
+[mpi_filterer] Guardando imagen resultante en: samples/output_mpi_damma.ppm...
+[mpi_filterer] Procesamiento distribuido completado exitosamente.
+```
+
+---
+
+## 3. Más Ejemplos de Ejecución
+
+### Probar con imagen en escala de grises (`sulfur.pgm`) con filtro Laplace:
+```bash
+mpirun --allow-run-as-root -np 4 ./mpi_filterer samples/sulfur.pgm samples/output_mpi_sulfur.pgm --f laplace
+```
+
+### Probar filtro de Realce (Sharpen) con 2 nodos:
+```bash
+mpirun --allow-run-as-root -np 2 ./mpi_filterer samples/damma.ppm samples/output_mpi_sharpen.ppm --f sharpen
+```
+
+### Aplicar automáticamente los 3 filtros principales (Blur + Laplace + Sharpen):
+Si no se pasa la bandera `--f`, el clúster distribuye y aplica los 3 filtros secuencialmente:
+```bash
 mpirun --allow-run-as-root -np 4 ./mpi_filterer samples/sulfur.pgm samples/output_mpi_all.pgm
+```
+
+---
+
+## 4. Arquitectura y Funcionamiento Interno
+
+1. **Descomposición de Dominio en Franjas Horizontales (*Slabs*):**
+   - La altura $H$ de la imagen se divide equitativamente entre los $P$ procesos MPI.
+   - Cada nodo $k$ recibe un intervalo de filas asignado $[y_{\text{start}}, y_{\text{end}})$.
+
+2. **Manejo de Fronteras con Celdas Fantasma (*Halos / Ghost Rows*):**
+   - Para aplicar el kernel de convolución $3 \times 3$, cada worker necesita conocer los píxeles vecinos de las filas adyacentes.
+   - El **Nodo 0 (Maestro)** empaqueta cada franja expandida con **1 fila superior y 1 fila inferior de margen (halo)**.
+   - Cada nodo calcula la convolución de manera 100% autónoma en su memoria privada.
+   - Cada worker devuelve únicamente sus filas útiles calculadas (descartando los halos), asegurando que el ensamble final en el maestro sea continuo y sin costuras ni artefactos visuales.
+
+3. **Memoria Aislada y Estricto Cumplimiento de Restricciones:**
+   - **Cero `std::vector`:** Los datos viajan como arreglos planos `unsigned char*` usando los tipos nativos de MPI (`MPI_UNSIGNED_CHAR` y `MPI_BYTE`).
+   - **Cero `std::string`:** Toda la gestión de rutas y nombres de filtros se realiza con `const char*` y funciones nativas de C.
+   - **Medición aislada:** Cada nodo registra sus propios ciclos de CPU (`std::clock`) y tiempo de reloj real (`Timer`), permitiendo analizar el balanceo de carga entre nodos.
+
+---
+
+## 5. Limpieza al Finalizar
+
+Cuando termines tus pruebas o grabes tu video, puedes apagar el clúster desde PowerShell:
+```powershell
+docker compose down
 ```
