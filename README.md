@@ -13,7 +13,7 @@ Este módulo implementa la paralelización en **memoria compartida** utilizando 
 ### Paso 1: Iniciar el contenedor de Docker
 Desde PowerShell en tu máquina Windows:
 ```powershell
-docker run --rm -it japeto/parallel-tools:v64 bash
+docker run --rm -it -v "${PWD}:/workspace" -w /workspace japeto/parallel-tools:v64 bash
 ```
 
 ---
