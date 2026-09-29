@@ -8,7 +8,15 @@ Este módulo implementa el procesamiento visual y la convolución 2D de imágene
 
 ## 1. Guía Rápida de Uso en Docker (Paso a Paso Verificado)
 
-### Paso 1: Compilar el ejecutable secuencial
+### Paso 1: Iniciar el contenedor de Docker
+Desde PowerShell en tu máquina Windows:
+```powershell
+docker run --rm -it japeto/parallel-tools:v64 bash
+```
+
+---
+
+### Paso 2: Compilar el ejecutable secuencial
 Dentro del contenedor en `/app/Micro-proyecto-2`:
 ```bash
 make filterer
