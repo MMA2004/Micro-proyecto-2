@@ -10,8 +10,15 @@ Este módulo implementa la paralelización en **memoria compartida** utilizando 
 
 ## 1. Guía Rápida de Uso en Docker (Paso a Paso Verificado)
 
+### Paso 1: Iniciar el contenedor de Docker
+Desde PowerShell en tu máquina Windows:
+```powershell
+docker run --rm -it japeto/parallel-tools:v64 bash
+```
 
-### Paso 1: Compilar los ejecutables de Diseño 3
+---
+
+### Paso 2: Compilar los ejecutables de Diseño 3
 Dentro del contenedor:
 ```bash
 make th_filterer omp_filterer
